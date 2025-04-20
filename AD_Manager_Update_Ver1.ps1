@@ -1,7 +1,9 @@
 param (
     [string]$csvFilePath
 )
-
+# Set PowerShell console width and height
+$Host.UI.RawUI.BufferSize = New-Object Management.Automation.Host.Size(200, 3000) # Buffer width and height
+$Host.UI.RawUI.WindowSize = New-Object Management.Automation.Host.Size(200, 50)   # Window width and height
 # Function to open file explorer and select a file
 function getCSVFile {
     # Load the required assembly for Windows Forms
@@ -145,6 +147,7 @@ do {
 
         $employeeIDs = @($csvData | Select-Object -ExpandProperty Employee_ID)
         $newManagers = @($csvData | Select-Object -ExpandProperty New_Manager)
+        $effectiveDates = @($csvData | Select-Object -ExpandProperty Effective_Date) # Extract Effective_Date column
 
         $results = @()
 
@@ -153,6 +156,7 @@ do {
         for ($i = 0; $i -lt $employeeIDs.Count; $i++) {
             $employeeID = $employeeIDs[$i]
             $newManagerRaw = $newManagers[$i]
+            $effectiveDate = $effectiveDates[$i] # Get the Effective_Date for the current user
 
             # Parse New Manager Name and Employee ID
             if ($newManagerRaw -match "^(.*?)\s*(?:\(.*?\))?\s*\((\d+)\)$") {
@@ -193,23 +197,24 @@ do {
                     NewManager           = $newManagerName
                     NewManagerID         = $newManagerID
                     ManagerMatch         = $managerMatch
+                    EffectiveDate        = $effectiveDate 
                 }
             } else {
                 Write-Host "No user found for Employee ID: $employeeID" -ForegroundColor Yellow
             }
         }
-
-        # Display results in a table format
-        Write-Host "`nResults:"
-        $results | Format-Table @{Label="Name"; Expression={"{0}" -f $_.Name}}, 
-                                @{Label="Username"; Expression={"{0}" -f $_.Username}},
-                                @{Label="Employee ID"; Expression={"{0}" -f $_.EmployeeID}},
-                                @{Label="Status"; Expression={"{0}" -f $_.Status}},
-                                @{Label="Current Manager"; Expression={"{0}" -f $_.CurrentManager}},
-                                @{Label="Current Manager ID"; Expression={"{0}" -f $_.CurrentManagerID}},
-                                @{Label="New Manager"; Expression={"{0}" -f $_.NewManager}},
-                                @{Label="New Manager ID"; Expression={"{0}" -f $_.NewManagerID}},
-                                @{Label="Manager Match"; Expression={"{0}" -f $_.ManagerMatch}} -AutoSize
+                # Display results in a table format
+                Write-Host "`nResults:"
+                $results | Format-Table @{Label="Name"; Expression={"{0}" -f $_.Name}}, 
+                                        @{Label="Username"; Expression={"{0}" -f $_.Username}},
+                                        @{Label="Employee ID"; Expression={"{0}" -f $_.EmployeeID}},
+                                        @{Label="Status"; Expression={"{0}" -f $_.Status}},
+                                        @{Label="Current Manager"; Expression={"{0}" -f $_.CurrentManager}},
+                                        @{Label="Current Manager ID"; Expression={"{0}" -f $_.CurrentManagerID}},
+                                        @{Label="New Manager"; Expression={"{0}" -f $_.NewManager}},
+                                        @{Label="New Manager ID"; Expression={"{0}" -f $_.NewManagerID}},
+                                        @{Label="Manager Match"; Expression={"{0}" -f $_.ManagerMatch}},
+                                        @{Label="Effective Date"; Expression={"{0}" -f $_.EffectiveDate}} -AutoSize | Out-String | Write-Host
     }
 
     # Prompt to re-run or exit
