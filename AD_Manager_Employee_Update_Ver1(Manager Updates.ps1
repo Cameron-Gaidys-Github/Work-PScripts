@@ -1,8 +1,41 @@
+# Script Title: Active Directory Manager-Employee Update Script
+# 
+# Input: Internal CSV file containing Employee ID and Manager details, with columns "Employee ID" and "Manager".
+#
+# Description:
+# This PowerShell script is designed to verify and update the manager-employee relationships in Active Directory (AD) 
+# based on data provided in a CSV file. It checks if the current manager assigned to an employee in AD matches the 
+# expected manager listed in the CSV file. The script generates a report of discrepancies and provides options to:
+# 
+# - Print all users with mismatched managers.
+# - Update the `Manager` property in AD for users with mismatched managers.
+# 
+# Key Features:
+# - Prompts the user to relaunch the script with administrator privileges if not already running as admin.
+# - Allows the user to select a CSV file containing employee and manager data via a file dialog or manual input.
+# - Converts Excel files (.xlsx) to CSV format if necessary.
+# - Validates the input file for required columns: "Employee ID" and "Manager".
+# - Queries AD for users and compares their current manager with the expected manager.
+# - Outputs a detailed report of manager-employee relationships, including mismatches.
+# - Provides an option to update the `Manager` property in AD for users with mismatched managers.
 param (
     [string]$csvFilePath
 )
 
-# Function to open file explorer and select a file
+# Prompt user to optionally run as Administrator
+$IsAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if (-not $IsAdmin) {
+    $response = Read-Host "This script is not running as Administrator. Would you like to relaunch it with admin rights? Needed to update Manager. (Y/N)"
+    if ($response -match '^(Y|y)$') {
+        $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+        Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments
+        exit
+    } else {
+        Write-Host "Continuing without Administrator privileges..." -ForegroundColor Yellow
+    }
+}
+
 function getCSVFile {
     # Load the required assembly for Windows Forms
     Add-Type -AssemblyName System.Windows.Forms
@@ -81,7 +114,7 @@ do {
         $csvFilePath = Read-Host "Enter the full path to the CSV file (drag-and-drop or type manually)"
     }
 
-   # Extract and sanitize the actual file path
+    # Extract and sanitize the actual file path
     if ($csvFilePath -match "([a-zA-Z]:\\[^\`"']+|\\\\[^\\]+\\[^\\]+[^\`"']*)") {
         $csvFilePath = $matches[1] -replace "[`'`"]", ""
     }
@@ -166,45 +199,30 @@ do {
         }
     }
 
-    # Display results in a neatly aligned bar-separated format
+    # Display results
     Write-Host "`nResults:"
-    Write-Host "Name                             Username             Employee ID | Current Manager                  Current Manager ID | Expected Manager                Expected Manager ID | Manager Match"
-    Write-Host "------------------------------------------------------------------|-----------------------------------------------------|-----------------------------------------------------|--------------"
+    $results | Format-Table -AutoSize
 
-    $results | ForEach-Object {
-        $line = "{0,-30}  {1,-20}  {2,-11} | {3,-30} {4,-20} | {5,-30} {6,-20} | {7,-10}" -f `
-            ($_.Name.Substring(0, [Math]::Min($_.Name.Length, 30))), `
-            ($_.Username.Substring(0, [Math]::Min($_.Username.Length, 20))), `
-            $_.EmployeeID, `
-            ($_.CurrentManager.Substring(0, [Math]::Min($_.CurrentManager.Length, 30))), `
-            $_.CurrentManagerID, `
-            ($_.ExpectedManager.Substring(0, [Math]::Min($_.ExpectedManager.Length, 30))), `
-            $_.ExpectedManagerID, `
-            $_.ManagerMatch
-        Write-Host $line
+    # Option to print non-matching managers
+    $printChoice = Read-Host "`nWould you like to print all users with ManagerMatch = 'No'? (Y/N)"
+    if ($printChoice -eq "Y") {
+        Write-Host "`nUsers with non-matching managers:"
+        $results | Where-Object { $_.ManagerMatch -eq "No" } | Format-Table -AutoSize
     }
 
-    # Ask the user if they want to display only users with non-matching managers
-    $filterChoice = Read-Host "`nWould you like to display only users with non-matching managers? (Y/N)"
-    if ($filterChoice -eq "Y") {
-        Write-Host "`nUsers with non-matching managers:"
-        Write-Host "Name                             Username             Employee ID | Current Manager                  Current Manager ID | Expected Manager                Expected Manager ID | Manager Match"
-        Write-Host "------------------------------------------------------------------|-----------------------------------------------------|-----------------------------------------------------|--------------"
-
+    # Option to update managers in AD
+    $updateChoice = Read-Host "`nWould you like to update managers in AD for users with ManagerMatch = 'No'? (Y/N)"
+    if ($updateChoice -eq "Y") {
         $results | Where-Object { $_.ManagerMatch -eq "No" } | ForEach-Object {
-            $line = "{0,-30}  {1,-20}  {2,-11} | {3,-30} {4,-20} | {5,-30} {6,-20} | {7,-10}" -f `
-                ($_.Name.Substring(0, [Math]::Min($_.Name.Length, 30))), `
-                ($_.Username.Substring(0, [Math]::Min($_.Username.Length, 20))), `
-                $_.EmployeeID, `
-                ($_.CurrentManager.Substring(0, [Math]::Min($_.CurrentManager.Length, 30))), `
-                $_.CurrentManagerID, `
-                ($_.ExpectedManager.Substring(0, [Math]::Min($_.ExpectedManager.Length, 30))), `
-                $_.ExpectedManagerID, `
-                $_.ManagerMatch
-            Write-Host $line
+            Write-Host "Updating manager for user: $($_.Username)..."
+            try {
+                Set-ADUser -Identity $_.Username -Manager (Get-ADUser -Filter { EmployeeID -eq $_.ExpectedManagerID }).DistinguishedName
+                Write-Host "Manager updated successfully for $($_.Username)." -ForegroundColor Green
+            } catch {
+                Write-Host "Failed to update manager for $($_.Username): $_" -ForegroundColor Red
+            }
         }
-}
- 
-     # Prompt to re-run or exit
-     $choice = Read-Host "`nPress R to re-run the script or Enter to close"
- } while ($choice -eq "R")
+    }
+    # Prompt to re-run or exit
+    $choice = Read-Host "`nPress R to re-run the script or Enter to close"
+} while ($choice -eq "R")

@@ -1,10 +1,42 @@
+# Script Title: Active Directory Manager Update Script for Job Changes
+# 
+# Input: Workday Job Change Report CSV file with columns: Employee_ID, New_Manager, Effective_Date
+#
+# Description:
+# This PowerShell script is designed to verify and update the manager-employee relationships in Active Directory (AD) 
+# based on job change data provided in a CSV file. It ensures that the `Manager` property in AD is updated to reflect 
+# the new manager specified in the CSV file. The script generates a detailed report of current and expected manager 
+# relationships and provides options to:
+# 
+# - Print all users with mismatched managers.
+# - Update the `Manager` property in AD for users with mismatched managers.
+# 
+# Key Features:
+# - Prompts the user to relaunch the script with administrator privileges if not already running as admin.
+# - Allows the user to select a CSV file containing job change data via a file dialog or manual input.
+# - Converts Excel files (.xlsx) to CSV format if necessary.
+# - Validates the input file for required columns: "Employee_ID", "New_Manager", and "Effective_Date".
+# - Queries AD for users and compares their current manager with the expected manager.
+# - Outputs a detailed report of manager-employee relationships, including mismatches.
+# - Provides an option to update the `Manager` property in AD for users with mismatched managers.
 param (
     [string]$csvFilePath
 )
-# Set PowerShell console width and height
-$Host.UI.RawUI.BufferSize = New-Object Management.Automation.Host.Size(200, 3000) # Buffer width and height
-$Host.UI.RawUI.WindowSize = New-Object Management.Automation.Host.Size(200, 50)   # Window width and height
-# Function to open file explorer and select a file
+
+# Prompt user to optionally run as Administrator
+$IsAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if (-not $IsAdmin) {
+    $response = Read-Host "This script is not running as Administrator. Would you like to relaunch it with admin rights? Needed to Updated Manager. (Y/N)"
+    if ($response -match '^(Y|y)$') {
+        $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+        Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments
+        exit
+    } else {
+        Write-Host "Continuing without Administrator privileges..." -ForegroundColor Yellow
+    }
+}
+
 function getCSVFile {
     # Load the required assembly for Windows Forms
     Add-Type -AssemblyName System.Windows.Forms
@@ -124,23 +156,26 @@ do {
         # Remove all double-quote and single-quote characters from the file path
         $csvFilePath = $csvFilePath -replace '[\"'']', ''
 
+        # Read the CSV file into $csvData
+        $csvData = Import-Csv -Path $csvFilePath
+
         # Validate path
-        if (-Not (Test-Path -Path $csvFilePath)) {
-            Write-Host "Error: The specified file does not exist. Please check the path and try again." -ForegroundColor Red
+        # Check if CSV has data and required columns
+        if (-not $csvData -or $csvData.Count -eq 0) {
+            Write-Host "No data found in the CSV file." -ForegroundColor Yellow
             Read-Host -Prompt "Press Enter to close this window"
             exit
         }
 
-        try {
-            $csvData = Import-Csv -Path $csvFilePath
-        } catch {
-            Write-Host "Error: Unable to import the CSV file. Ensure it is in the correct format." -ForegroundColor Red
-            Read-Host -Prompt "Press Enter to close this window"
-            exit
-        }
-
-        if (-Not ($csvData | Get-Member -Name Employee_ID)) {
+        if (-not ($csvData | Get-Member -Name Employee_ID -ErrorAction SilentlyContinue)) {
             Write-Host "Error: The CSV file does not contain the required 'Employee_ID' column." -ForegroundColor Red
+            Read-Host -Prompt "Press Enter to close this window"
+            exit
+        }
+
+        # Also optional: Check if Employee_ID column has ANY non-blank values
+        if (-not ($csvData.Employee_ID | Where-Object { $_ -ne $null -and $_.Trim() -ne "" })) {
+            Write-Host "No Employee_ID data found in the CSV file." -ForegroundColor Yellow
             Read-Host -Prompt "Press Enter to close this window"
             exit
         }
@@ -167,7 +202,7 @@ do {
                 $newManagerID = "N/A"
             }
 
-            $user = Get-ADUser -Filter {EmployeeID -eq $employeeID} -Properties EmployeeID, SamAccountName, Name, Enabled, Manager
+            $user = Get-ADUser -Filter {EmployeeID -eq $employeeID} -Properties EmployeeID, SamAccountName, Name, Enabled, Manager, MemberOf
 
             if ($user) {
                 # Get the current manager's name and Employee ID if the Manager property is populated
@@ -186,6 +221,11 @@ do {
                 # Compare Current Manager ID and New Manager ID
                 $managerMatch = if ($currentManagerID -eq $newManagerID) { "Yes" } else { "No" }
 
+                # Check group membership
+                $userGroups = $user.MemberOf | ForEach-Object { (Get-ADGroup $_).Name }
+                $isSMSUser = $userGroups -contains "SMS Users"
+                $isSugarbushRTP = $userGroups -contains "Sugarbush-SUG-RTP"
+
                 # Add user details to results
                 $results += [PSCustomObject]@{
                     Name                 = $user.Name -replace "\s+\(.*\)$", "" # Remove suffix like (SUG) or (On Leave)
@@ -197,24 +237,63 @@ do {
                     NewManager           = $newManagerName
                     NewManagerID         = $newManagerID
                     ManagerMatch         = $managerMatch
-                    EffectiveDate        = $effectiveDate 
+                    EffectiveDate        = $effectiveDate
+                    SMSUsers             = if ($isSMSUser) { "Yes" } else { "No" }
+                    SugarbushSUGRTP      = if ($isSugarbushRTP) { "Yes" } else { "No" }
                 }
             } else {
                 Write-Host "No user found for Employee ID: $employeeID" -ForegroundColor Yellow
             }
         }
-                # Display results in a table format
-                Write-Host "`nResults:"
-                $results | Format-Table @{Label="Name"; Expression={"{0}" -f $_.Name}}, 
-                                        @{Label="Username"; Expression={"{0}" -f $_.Username}},
-                                        @{Label="Employee ID"; Expression={"{0}" -f $_.EmployeeID}},
-                                        @{Label="Status"; Expression={"{0}" -f $_.Status}},
-                                        @{Label="Current Manager"; Expression={"{0}" -f $_.CurrentManager}},
-                                        @{Label="Current Manager ID"; Expression={"{0}" -f $_.CurrentManagerID}},
-                                        @{Label="New Manager"; Expression={"{0}" -f $_.NewManager}},
-                                        @{Label="New Manager ID"; Expression={"{0}" -f $_.NewManagerID}},
-                                        @{Label="Manager Match"; Expression={"{0}" -f $_.ManagerMatch}},
-                                        @{Label="Effective Date"; Expression={"{0}" -f $_.EffectiveDate}} -AutoSize | Out-String | Write-Host
+
+        # Display results in a table format
+        Write-Host "`nResults:"
+        $results | Format-Table @{Label="Name"; Expression={"{0}" -f $_.Name}}, 
+                                    @{Label="Username"; Expression={"{0}" -f $_.Username}},
+                                    @{Label="Employee ID"; Expression={"{0}" -f $_.EmployeeID}},
+                                    @{Label="Status"; Expression={"{0}" -f $_.Status}},
+                                    @{Label="Current Manager"; Expression={"{0}" -f $_.CurrentManager}},
+                                    @{Label="Current Manager ID"; Expression={"{0}" -f $_.CurrentManagerID}},
+                                    @{Label="New Manager"; Expression={"{0}" -f $_.NewManager}},
+                                    @{Label="New Manager ID"; Expression={"{0}" -f $_.NewManagerID}},
+                                    @{Label="Manager Match"; Expression={"{0}" -f $_.ManagerMatch}},
+                                    @{Label="Effective Date"; Expression={"{0}" -f $_.EffectiveDate}},
+                                    @{Label="SMS Users"; Expression={"{0}" -f $_.SMSUsers}},
+                                    @{Label="Sugarbush-SUG-RTP"; Expression={"{0}" -f $_.SugarbushSUGRTP}} -AutoSize | Out-String | Write-Host
+
+        # Prompt user for confirmation before updating managers
+        $updateConfirmation = Read-Host "`nDo you want to update managers in Active Directory? Type 'Yes' to proceed or anything else to cancel"
+        if ($updateConfirmation -eq "Yes") {
+            Write-Host "Updating managers in Active Directory..." -ForegroundColor Cyan
+            foreach ($result in $results) {
+                if ($result.ManagerMatch -eq "No" -and $result.NewManagerID -ne "N/A" -and $result.NewManagerID.Trim() -ne "") {
+                    try {
+                        Write-Host "Processing user: $($result.Name) with EmployeeID: $($result.EmployeeID)" -ForegroundColor Yellow
+                        Write-Host "New Manager ID: $($result.NewManagerID)" -ForegroundColor Yellow
+        
+                        $userToUpdate = Get-ADUser -LDAPFilter "(employeeID=$($result.EmployeeID))" -Properties DistinguishedName
+                        $newManager   = Get-ADUser -LDAPFilter "(employeeID=$($result.NewManagerID))" -Properties DistinguishedName
+        
+                        if ($userToUpdate -and $newManager) {
+                            Write-Host "Updating manager for user '$($userToUpdate.SamAccountName)' to '$($newManager.SamAccountName)'" -ForegroundColor Cyan
+                            Write-Host "New Manager DN: $($newManager.DistinguishedName)" -ForegroundColor Cyan
+        
+                            Set-ADUser -Identity $userToUpdate.DistinguishedName -Manager $newManager.DistinguishedName
+                            Write-Host "✅ Updated manager for user '$($userToUpdate.SamAccountName)' to '$($newManager.SamAccountName)'" -ForegroundColor Green
+                        } elseif (-not $userToUpdate) {
+                            Write-Host "❌ User with Employee ID $($result.EmployeeID) not found." -ForegroundColor Yellow
+                        } elseif (-not $newManager) {
+                            Write-Host "❌ New manager with Employee ID $($result.NewManagerID) not found." -ForegroundColor Yellow
+                        }
+                    } catch {
+                        Write-Host "❌ Failed to update manager for user $($result.Name): $_" -ForegroundColor Red
+                    }
+                }
+            }      
+        
+        } else {
+            Write-Host "Manager updates canceled by user." -ForegroundColor Yellow
+        }
     }
 
     # Prompt to re-run or exit

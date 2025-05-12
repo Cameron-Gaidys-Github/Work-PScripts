@@ -1,3 +1,19 @@
+# Termination Script: Active Directory Group Membership Verification
+# 
+# Input: Workday Termination Report CSV file (Employee_ID, Termination_Date)
+# 
+# This PowerShell script is used to verify Active Directory (AD) group memberships and account statuses 
+# for employees listed in a CSV file, typically after a termination process. 
+# 
+# Key Features:
+# - Allows the user to select a CSV file containing employee data (Employee_ID and Termination_Date) via a file dialog or manual input.
+# - Converts Excel files (.xlsx) to CSV format if necessary.
+# - Ensures the script is run with administrative privileges and installs the RSAT tools if required.
+# - Imports the Active Directory module and validates its availability.
+# - Searches AD for users matching the Employee_IDs in the CSV file and retrieves their group memberships and account statuses.
+# - Filters users based on membership in specific groups ("SMS Users" and "Sugarbush-SUG-RTP") or active account status.
+# - Outputs the results, including termination dates, in a table format.
+# - Provides an option to re-run the script or exit.
 param (
     [string]$csvFilePath
 )
