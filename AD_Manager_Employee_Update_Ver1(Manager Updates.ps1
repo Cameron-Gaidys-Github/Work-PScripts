@@ -1,6 +1,6 @@
 # Script Title: Active Directory Manager-Employee Update Script
 # 
-# Input: Internal CSV file containing Employee ID and Manager details, with columns "Employee ID" and "Manager".
+# Input: Internal CSV file containing Employee ID and Manager details, with columns "Employee ID" and "Manager".D
 #
 # Description:
 # This PowerShell script is designed to verify and update the manager-employee relationships in Active Directory (AD) 

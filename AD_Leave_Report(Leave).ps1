@@ -5,15 +5,7 @@
 # This PowerShell script is used to verify Active Directory (AD) group memberships and account statuses 
 # for employees listed in a leave report CSV file. It is typically used to track employees on leave 
 # and their associated AD account details.
-# 
-# Key Features:
-# - Allows the user to select a CSV file containing leave report data (Employee_ID, Leave_Started, Estimated_Return, etc.) via a file dialog or manual input.
-# - Converts Excel files (.xlsx) to CSV format if necessary.
-# - Extracts leave details such as leave start date, estimated return date, and actual end date.
-# - Searches AD for users matching the Employee_IDs in the CSV file and retrieves their group memberships and account statuses.
-# - Filters users based on membership in specific groups ("SMS Users" and "Sugarbush-SUG-RTP") or active account status.
-# - Outputs the results, including leave details, in a formatted table.
-# - Provides an option to re-run the script or exit.
+
 param (
     [string]$csvFilePath
 )
@@ -40,11 +32,6 @@ function getCSVFile {
             $ws.SaveAs($FileName, 6)
         }
         $Excel.Quit()
-    }
-
-    $firstline = Get-Content $FileName -First 6
-    if ($firstline -match "Terminations") {
-        (Get-Content $FileName | Select-Object -Skip 6) | Set-Content $FileName
     }
 
     return $FileName
@@ -105,10 +92,12 @@ do {
         $actualEndDate = if ($actualEndDate) { $actualEndDate } else { "N/A" }
         $initiated = if ($initiated) { $initiated } else { "N/A" }
 
-        $user = Get-ADUser -Filter {EmployeeID -eq $employeeID} -Properties EmployeeID, SamAccountName, Name, Enabled, MemberOf
+        $user = Get-ADUser -Filter {EmployeeID -eq $employeeID} -Properties EmployeeID, SamAccountName, Name, Enabled, MemberOf, Title
 
         $smsUsersMember = $false
         $sugarbushMember = $false
+        $action = "N/A"
+        $jobTitle = "N/A"
 
         if ($user) {
             $userGroups = $user.MemberOf | ForEach-Object { (Get-ADGroup $_).Name }
@@ -119,6 +108,15 @@ do {
                 $username = "N/A"
             } else {
                 $username = $user.SamAccountName
+            }
+
+            # Extract job title and determine action
+            $jobTitle = $user.Title
+            $jobTitlePrefix = if ($jobTitle -match "^(.*?)[,\s]") { $matches[1].Trim().ToLower() } else { $jobTitle.ToLower() }
+            $action = if ($jobTitlePrefix -in @("supervisor", "manager", "director")) {
+                "Suspend with Delegation"
+            } else {
+                "Suspend with no Delegate"
             }
         } else {
             $username = "N/A"
@@ -135,16 +133,18 @@ do {
             Initiated       = $initiated
             "SMS Users"     = if ($smsUsersMember) { "Yes" } else { "No" }
             "Sugarbush-SUG-RTP" = if ($sugarbushMember) { "Yes" } else { "No" }
+            JobTitle        = $jobTitle
+            Action          = $action
         }
         $results += $result
     }
 
     Write-Host "`nResults:"
-    Write-Host "Preferred Name                  Username                Employee ID | Active | Leave Started                   Estimated Return                 Actual End Date                  Initiated                         SMS Users | Sugarbush-SUG-RTP"
-    Write-Host "-------------------------------|----------------------|-------------|--------|--------------------------------|--------------------------------|--------------------------------|--------------------------------|-----------|-------------------"
+    Write-Host "Preferred Name                  Username                Employee ID | Active | Leave Started                   Estimated Return                 Actual End Date                  Initiated                         SMS Users | Sugarbush-SUG-RTP | Job Title                 | Action"
+    Write-Host "-------------------------------|----------------------|-------------|--------|--------------------------------|--------------------------------|--------------------------------|--------------------------------|-----------|-------------------|---------------------------|-------------------------"
 
     $results | ForEach-Object {
-        $line = "{0,-30} | {1,-20} | {2,-11} | {3,-6} | {4,-30} | {5,-30} | {6,-30} | {7,-30} | {8,-9} | {9,-17}" -f `
+        $line = "{0,-30} | {1,-20} | {2,-11} | {3,-6} | {4,-30} | {5,-30} | {6,-30} | {7,-30} | {8,-9} | {9,-17} | {10,-25} | {11,-25}" -f `
             ($_.PreferredName.Substring(0, [Math]::Min($_.PreferredName.Length, 30))), `
             ($_.Username.Substring(0, [Math]::Min($_.Username.Length, 20))), `
             $_.EmployeeID, `
@@ -154,7 +154,9 @@ do {
             ($_.ActualEndDate.Substring(0, [Math]::Min($_.ActualEndDate.Length, 30))), `
             ($_.Initiated.Substring(0, [Math]::Min($_.Initiated.Length, 30))), `
             $_.'SMS Users', `
-            $_.'Sugarbush-SUG-RTP'
+            $_.'Sugarbush-SUG-RTP', `
+            ($_.JobTitle.Substring(0, [Math]::Min($_.JobTitle.Length, 25))), `
+            $_.Action
         Write-Host $line
     }
 

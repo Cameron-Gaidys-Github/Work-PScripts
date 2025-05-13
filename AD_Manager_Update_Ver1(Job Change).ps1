@@ -22,7 +22,6 @@
 param (
     [string]$csvFilePath
 )
-
 # Prompt user to optionally run as Administrator
 $IsAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
@@ -132,6 +131,7 @@ do {
     # Import the Active Directory module
     Write-Host "Step 2: Importing Active Directory module..."
     try {
+
         Import-Module ActiveDirectory -ErrorAction Stop
     } catch {
         Write-Host "Error: Active Directory module is not available. Ensure RSAT is installed." -ForegroundColor Red
@@ -186,12 +186,13 @@ do {
 
         $results = @()
 
-        # Querying Active Directory for users
+       # Querying Active Directory for users
         Write-Host "Step 5: Querying Active Directory for users..."
         for ($i = 0; $i -lt $employeeIDs.Count; $i++) {
             $employeeID = $employeeIDs[$i]
             $newManagerRaw = $newManagers[$i]
             $effectiveDate = $effectiveDates[$i] # Get the Effective_Date for the current user
+            $newJobRaw = $csvData[$i].New_Job # Get the New_Job column value for the current user
 
             # Parse New Manager Name and Employee ID
             if ($newManagerRaw -match "^(.*?)\s*(?:\(.*?\))?\s*\((\d+)\)$") {
@@ -202,7 +203,10 @@ do {
                 $newManagerID = "N/A"
             }
 
-            $user = Get-ADUser -Filter {EmployeeID -eq $employeeID} -Properties EmployeeID, SamAccountName, Name, Enabled, Manager, MemberOf
+            # Parse New Job Title from New_Job column
+            $newJobTitle = if ($newJobRaw -match "- (.+)$") { $matches[1].Trim() } else { "Invalid Format" }
+
+            $user = Get-ADUser -Filter {EmployeeID -eq $employeeID} -Properties EmployeeID, SamAccountName, Name, Enabled, Manager, MemberOf, Title
 
             if ($user) {
                 # Get the current manager's name and Employee ID if the Manager property is populated
@@ -231,6 +235,8 @@ do {
                     Name                 = $user.Name -replace "\s+\(.*\)$", "" # Remove suffix like (SUG) or (On Leave)
                     Username             = $user.SamAccountName
                     EmployeeID           = $user.EmployeeID
+                    OldJobTitle          = $user.Title # Old job title from AD
+                    NewJobTitle          = $newJobTitle # New job title from CSV
                     Status               = $status
                     CurrentManager       = $currentManagerName
                     CurrentManagerID     = $currentManagerID
@@ -247,52 +253,89 @@ do {
         }
 
         # Display results in a table format
-        Write-Host "`nResults:"
-        $results | Format-Table @{Label="Name"; Expression={"{0}" -f $_.Name}}, 
-                                    @{Label="Username"; Expression={"{0}" -f $_.Username}},
-                                    @{Label="Employee ID"; Expression={"{0}" -f $_.EmployeeID}},
-                                    @{Label="Status"; Expression={"{0}" -f $_.Status}},
-                                    @{Label="Current Manager"; Expression={"{0}" -f $_.CurrentManager}},
-                                    @{Label="Current Manager ID"; Expression={"{0}" -f $_.CurrentManagerID}},
-                                    @{Label="New Manager"; Expression={"{0}" -f $_.NewManager}},
-                                    @{Label="New Manager ID"; Expression={"{0}" -f $_.NewManagerID}},
-                                    @{Label="Manager Match"; Expression={"{0}" -f $_.ManagerMatch}},
-                                    @{Label="Effective Date"; Expression={"{0}" -f $_.EffectiveDate}},
-                                    @{Label="SMS Users"; Expression={"{0}" -f $_.SMSUsers}},
-                                    @{Label="Sugarbush-SUG-RTP"; Expression={"{0}" -f $_.SugarbushSUGRTP}} -AutoSize | Out-String | Write-Host
+        Write-Host "`nResults (Active Accounts Only):"
+        $activeResults = $results | Where-Object { $_.Status -eq "Active" } # Filter only active accounts
 
-        # Prompt user for confirmation before updating managers
-        $updateConfirmation = Read-Host "`nDo you want to update managers in Active Directory? Type 'Yes' to proceed or anything else to cancel"
+        $activeResults | Format-Table @{Label="Name"; Expression={"{0}" -f $_.Name}}, 
+                                        @{Label="Username"; Expression={"{0}" -f $_.Username}},
+                                        @{Label="Employee ID"; Expression={"{0}" -f $_.EmployeeID}},
+                                        @{Label="Old Job Title"; Expression={"{0}" -f $_.OldJobTitle}},
+                                        @{Label="New Job Title"; Expression={"{0}" -f $_.NewJobTitle}},
+                                        @{Label="Status"; Expression={"{0}" -f $_.Status}},
+                                        @{Label="Current Manager"; Expression={"{0}" -f $_.CurrentManager}},
+                                        @{Label="Current Manager ID"; Expression={"{0}" -f $_.CurrentManagerID}},
+                                        @{Label="New Manager"; Expression={"{0}" -f $_.NewManager}},
+                                        @{Label="New Manager ID"; Expression={"{0}" -f $_.NewManagerID}},
+                                        @{Label="Manager Match"; Expression={"{0}" -f $_.ManagerMatch}},
+                                        @{Label="Effective Date"; Expression={"{0}" -f $_.EffectiveDate}},
+                                        @{Label="SMS Users"; Expression={"{0}" -f $_.SMSUsers}},
+                                        @{Label="Sugarbush-SUG-RTP"; Expression={"{0}" -f $_.SugarbushSUGRTP}} -AutoSize | Out-String | Write-Host
+
+        # Add the export option here
+        $exportChoice = Read-Host "`nDo you want to export the results to a CSV file in the Downloads folder? Type 'Yes' to proceed or anything else to skip"
+        if ($exportChoice -eq "Yes") {
+            $downloadsFolder = [Environment]::GetFolderPath('UserProfile') + "\Downloads"
+            $outputFilePath = Join-Path -Path $downloadsFolder -ChildPath "AD_Manager_Update_Results.csv"
+            try {
+                $results | Export-Csv -Path $outputFilePath -NoTypeInformation -Encoding UTF8
+                Write-Host "✅ Results have been exported to: $outputFilePath" -ForegroundColor Green
+            } catch {
+                Write-Host "❌ Failed to export results to CSV: $_" -ForegroundColor Red
+            }
+        } else {
+            Write-Host "Export to CSV skipped by user." -ForegroundColor Yellow
+        }
+
+        # Prompt user for confirmation before updating managers and job titles
+        $updateConfirmation = Read-Host "`nDo you want to update managers, job titles, and descriptions in Active Directory? Type 'Yes' to proceed or anything else to cancel"
         if ($updateConfirmation -eq "Yes") {
-            Write-Host "Updating managers in Active Directory..." -ForegroundColor Cyan
+            Write-Host "Updating managers, job titles, and descriptions in Active Directory..." -ForegroundColor Cyan
             foreach ($result in $results) {
-                if ($result.ManagerMatch -eq "No" -and $result.NewManagerID -ne "N/A" -and $result.NewManagerID.Trim() -ne "") {
-                    try {
-                        Write-Host "Processing user: $($result.Name) with EmployeeID: $($result.EmployeeID)" -ForegroundColor Yellow
-                        Write-Host "New Manager ID: $($result.NewManagerID)" -ForegroundColor Yellow
-        
-                        $userToUpdate = Get-ADUser -LDAPFilter "(employeeID=$($result.EmployeeID))" -Properties DistinguishedName
-                        $newManager   = Get-ADUser -LDAPFilter "(employeeID=$($result.NewManagerID))" -Properties DistinguishedName
-        
-                        if ($userToUpdate -and $newManager) {
+                try {
+                    Write-Host "Processing user: $($result.Name) with EmployeeID: $($result.EmployeeID)" -ForegroundColor Yellow
+
+                    $userToUpdate = Get-ADUser -LDAPFilter "(employeeID=$($result.EmployeeID))" -Properties DistinguishedName, Title, Description
+                    $newManager   = if ($result.NewManagerID -ne "N/A" -and $result.NewManagerID.Trim() -ne "") {
+                        Get-ADUser -LDAPFilter "(employeeID=$($result.NewManagerID))" -Properties DistinguishedName
+                    }
+
+                    if ($userToUpdate) {
+                        # Update Manager if necessary
+                        if ($result.ManagerMatch -eq "No" -and $newManager) {
                             Write-Host "Updating manager for user '$($userToUpdate.SamAccountName)' to '$($newManager.SamAccountName)'" -ForegroundColor Cyan
-                            Write-Host "New Manager DN: $($newManager.DistinguishedName)" -ForegroundColor Cyan
-        
                             Set-ADUser -Identity $userToUpdate.DistinguishedName -Manager $newManager.DistinguishedName
                             Write-Host "✅ Updated manager for user '$($userToUpdate.SamAccountName)' to '$($newManager.SamAccountName)'" -ForegroundColor Green
-                        } elseif (-not $userToUpdate) {
-                            Write-Host "❌ User with Employee ID $($result.EmployeeID) not found." -ForegroundColor Yellow
-                        } elseif (-not $newManager) {
-                            Write-Host "❌ New manager with Employee ID $($result.NewManagerID) not found." -ForegroundColor Yellow
                         }
-                    } catch {
-                        Write-Host "❌ Failed to update manager for user $($result.Name): $_" -ForegroundColor Red
+
+                        # Update Job Title and Description if they differ from the current values
+                        if ($result.NewJobTitle -ne "Invalid Format" -and $result.NewJobTitle.Trim() -ne "") {
+                            if ($userToUpdate.Title -ne $result.NewJobTitle) {
+                                Write-Host "Updating job title for user '$($userToUpdate.SamAccountName)' to '$($result.NewJobTitle)'" -ForegroundColor Cyan
+                                Set-ADUser -Identity $userToUpdate.DistinguishedName -Title $result.NewJobTitle
+                                Write-Host "✅ Updated job title for user '$($userToUpdate.SamAccountName)' to '$($result.NewJobTitle)'" -ForegroundColor Green
+                            } else {
+                                Write-Host "⚠️ Job title for user '$($userToUpdate.SamAccountName)' is already '$($result.NewJobTitle)'. Skipping update." -ForegroundColor Yellow
+                            }
+
+                            if ($userToUpdate.Description -ne $result.NewJobTitle) {
+                                Write-Host "Updating description for user '$($userToUpdate.SamAccountName)' to '$($result.NewJobTitle)'" -ForegroundColor Cyan
+                                Set-ADUser -Identity $userToUpdate.DistinguishedName -Description $result.NewJobTitle
+                                Write-Host "✅ Updated description for user '$($userToUpdate.SamAccountName)' to '$($result.NewJobTitle)'" -ForegroundColor Green
+                            } else {
+                                Write-Host "⚠️ Description for user '$($userToUpdate.SamAccountName)' is already '$($result.NewJobTitle)'. Skipping update." -ForegroundColor Yellow
+                            }
+                        } else {
+                            Write-Host "❌ Invalid or missing new job title for user '$($userToUpdate.SamAccountName)'. Skipping job title and description update." -ForegroundColor Yellow
+                        }
+                    } else {
+                        Write-Host "❌ User with Employee ID $($result.EmployeeID) not found." -ForegroundColor Yellow
                     }
+                } catch {
+                    Write-Host "❌ Failed to update manager, job title, or description for user $($result.Name): $_" -ForegroundColor Red
                 }
-            }      
-        
+            }
         } else {
-            Write-Host "Manager updates canceled by user." -ForegroundColor Yellow
+            Write-Host "Manager, job title, and description updates canceled by user." -ForegroundColor Yellow
         }
     }
 
