@@ -164,49 +164,74 @@ do {
     Write-Host "Checking account statuses in Active Directory:" -ForegroundColor Yellow
     foreach ($row in $csvData) {
         $employeeID = $row."Employee ID"
-        $supervisor = $row."Manager" # Assuming the column is named "Manager"
+        $managerColumn = $row."Manager" # Assuming the column is named "Manager"
         $completionStatus = $row."Completion Status" # Assuming the column is named "Completion Status"
-
+    
+        # Extract Supervisor's Employee ID from the Manager column
+        $supervisorID = if ($managerColumn -match "\((\d+)\)$") {
+            $matches[1] # Extract the numeric ID inside parentheses
+        } else {
+            $null # If no match, set to null
+        }
+    
         # Only process rows where Completion Status is empty or not "Completed"
         if ([string]::IsNullOrWhiteSpace($completionStatus) -or $completionStatus -ne "Completed") {
             try {
                 # Search for the user in AD using the Employee ID
                 $adUser = Get-ADUser -Filter {EmployeeID -eq $employeeID} -Properties Enabled, Name
-
+    
+                # Search for the supervisor in AD using the extracted Supervisor's Employee ID
+                $supervisorUser = if ($supervisorID -and $supervisorID.Trim() -ne "") {
+                    Get-ADUser -Filter {EmployeeID -eq $supervisorID} -Properties Name
+                }
+    
                 # Determine account status
                 $accountStatus = if ($adUser.Enabled -eq $true) { "Enabled" } else { "Disabled" }
-
+    
                 # Add the row to the report data
                 $rowData = [PSCustomObject]@{
                     "ACCT STATUS" = $accountStatus
-                    "SUPERVISOR" = $supervisor
+                    "Supervisor Name" = if ($supervisorUser) { $supervisorUser.Name } else { "Not Found" }
                     "Staff to complete Training" = $adUser.Name
                 }
                 $reportData += $rowData
-
+    
                 # Display the row in the console
                 $rowData | Format-Table -AutoSize
             } catch {
                 # Handle case where user is not found in AD
                 $rowData = [PSCustomObject]@{
                     "ACCT STATUS" = "Not Found"
-                    "SUPERVISOR" = $supervisor
+                    "Supervisor Name" = "Not Found"
                     "Staff to complete Training" = "Not Found"
                 }
                 $reportData += $rowData
-
+    
                 # Display the row in the console
                 $rowData | Format-Table -AutoSize
             }
         }
     }
-
+    
     # Ask the user if they want to export the report
     $exportChoice = Read-Host "Press Y to export the report to a CSV file or any other key to skip"
     if ($exportChoice -eq "Y") {
         # Generate a unique file path if the file already exists
         $outputFilePath = Get-UniqueFilePath -baseFilePath $baseOutputFilePath
-
+    
+        # Export the report data to a CSV file
+        $reportData | Export-Csv -Path $outputFilePath -NoTypeInformation -Encoding UTF8
+        Write-Host "Report has been exported to $outputFilePath" -ForegroundColor Green
+    } else {
+        Write-Host "Report was not exported." -ForegroundColor Yellow
+    }
+    
+    # Ask the user if they want to export the report
+    $exportChoice = Read-Host "Press Y to export the report to a CSV file or any other key to skip"
+    if ($exportChoice -eq "Y") {
+        # Generate a unique file path if the file already exists
+        $outputFilePath = Get-UniqueFilePath -baseFilePath $baseOutputFilePath
+    
         # Export the report data to a CSV file
         $reportData | Export-Csv -Path $outputFilePath -NoTypeInformation -Encoding UTF8
         Write-Host "Report has been exported to $outputFilePath" -ForegroundColor Green

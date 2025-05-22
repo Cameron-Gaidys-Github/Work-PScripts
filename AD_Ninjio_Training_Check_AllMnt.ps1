@@ -110,38 +110,48 @@ do {
     Write-Host "`nChecking Ninjio training status for employees at $selectedLocation..."
     $results = @()
     foreach ($employee in $filteredEmployees) {
-        $employeeID = $employee.'Employee ID'
-        $completionStatus = $employee.'Completion Status'
-        $trainingStatus = if ($completionStatus -eq "Completed") { "Completed" } else { "Not Completed" }
+    $employeeID = $employee.'Employee ID'
+    $completionStatus = $employee.'Completion Status'
+    $trainingStatus = if ($completionStatus -eq "Completed") { "Completed" } else { "Not Completed" }
 
-        $user = Get-ADUser -Filter {EmployeeID -eq $employeeID} -Properties EmployeeID, Name, Enabled, Manager
+    $user = Get-ADUser -Filter {EmployeeID -eq $employeeID} -Properties EmployeeID, Name, Enabled, Manager
 
-        if ($user) {
-            $managerName = if ($user.Manager) {
-                (Get-ADUser -Identity $user.Manager -Properties Name).Name
-            } else {
-                "No Manager Assigned"
-            }
-
-            $results += [PSCustomObject]@{
-                Name             = $user.Name
-                EmployeeID       = $user.EmployeeID
-                AccountStatus    = if ($user.Enabled) { "Active" } else { "Inactive" }
-                Manager          = $managerName
-                TrainingStatus   = $trainingStatus
-            }
+    if ($user) {
+        $managerName = if ($user.Manager) {
+            (Get-ADUser -Identity $user.Manager -Properties Name).Name
         } else {
-            Write-Host "No user found for Employee ID: $employeeID" -ForegroundColor Yellow
+            "No Manager Assigned"
         }
-    }
 
-    # Display results
-    if ($results.Count -gt 0) {
-        Write-Host "`nResults for ${selectedLocation}:"
-        $results | Format-Table Name, EmployeeID, AccountStatus, Manager, TrainingStatus -AutoSize
+        $results += [PSCustomObject]@{
+            Manager                = $managerName
+            "Staff to Complete Training" = $user.Name
+            EmployeeID             = $user.EmployeeID
+            AccountStatus          = if ($user.Enabled) { "Active" } else { "Inactive" }
+            TrainingStatus         = $trainingStatus
+        }
     } else {
-        Write-Host "No employees found at ${selectedLocation}." -ForegroundColor Yellow
+        Write-Host "No user found for Employee ID: $employeeID" -ForegroundColor Yellow
     }
+}
 
-    $choice = Read-Host "Press R to re-run the script or Enter to exit"
+# Display results
+if ($results.Count -gt 0) {
+    Write-Host "`nResults for ${selectedLocation}:"
+    $results | Format-Table Manager, 'Staff to Complete Training', EmployeeID, AccountStatus, TrainingStatus -AutoSize
+
+    # Prompt to export results
+    $exportChoice = Read-Host "Would you like to export these results to a CSV file in your Downloads folder? (Y/N)"
+    if ($exportChoice -eq "Y") {
+        $downloadsPath = [Environment]::GetFolderPath('UserProfile') + "\Downloads"
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $exportFile = Join-Path $downloadsPath "Ninjio_Training_Results_${($selectedLocation -replace '[^a-zA-Z0-9]', '_')}_$timestamp.csv"
+        $results | Export-Csv -Path $exportFile -NoTypeInformation -Encoding UTF8
+        Write-Host "Results exported to: $exportFile" -ForegroundColor Green
+    }
+} else {
+    Write-Host "No employees found at ${selectedLocation}." -ForegroundColor Yellow
+}
+
+$choice = Read-Host "Press R to re-run the script or Enter to exit"
 } while ($choice -eq "R")

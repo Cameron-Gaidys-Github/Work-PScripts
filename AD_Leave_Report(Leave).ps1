@@ -61,9 +61,22 @@ do {
     }
 
     try {
-        $csvData = Import-Csv -Path $csvFilePath
+    $csvData = Import-Csv -Path $csvFilePath
     } catch {
         Write-Host "Error: Unable to import the CSV file. Ensure it is in the correct format." -ForegroundColor Red
+        Read-Host -Prompt "Press Enter to close this window"
+        exit
+    }
+
+    # Handle empty CSV file
+    if (-not $csvData -or $csvData.Count -eq 0) {
+        Write-Host "The CSV file is empty. Please provide a file with data." -ForegroundColor Yellow
+        $choice = Read-Host "`nPress R to re-run the script or Enter to close"
+        if ($choice -eq "R") { continue } else { break }
+    }
+
+    if (-Not ($csvData | Get-Member -Name Employee_ID)) {
+        Write-Host "Error: The CSV file does not contain the required Employee_ID column." -ForegroundColor Red
         Read-Host -Prompt "Press Enter to close this window"
         exit
     }
